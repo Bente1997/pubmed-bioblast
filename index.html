@@ -102,7 +102,7 @@
   <button onclick="copyTemplate()">Copy to Clipboard</button>
 
   <div class="footer">
-    Made with 💙 for Oroboros Instruments · <a href="https://pubmed.ncbi.nlm.nih.gov/" target="_blank">PubMed</a> APIs.
+    Made with 💙 for Oroboros Instruments · <a href="https://pubmed.ncbi.nlm.nih.gov/" target="_blank">PubMed</a> API.
   </div>
 
   <script>
@@ -137,14 +137,23 @@ async function generateTemplate() {
   const xmlDoc = parser.parseFromString(fetchText, "application/xml");
 
 // Full author names (cleaned from special characters)
+// Clean function 
 function cleanString(str) {
   return str.normalize("NFD")
             .replace(/[\u0300-\u036f]/g, "")
             .replace(/[^\x00-\x7F]/g, "");
 }
 
+// Full author names + short names
 const authorNodes = xmlDoc.querySelectorAll("AuthorList > Author");
-const authors = Array.from(authorNodes).map(author => {
+
+const authorsShort = Array.from(authorNodes).map(author => {
+  const last = author.querySelector("LastName")?.textContent || "";
+  const initials = author.querySelector("Initials")?.textContent || "";
+  return cleanString(`${last} ${initials}`);
+}).join(", ");
+
+const authorsFull = Array.from(authorNodes).map(author => {
   const last = author.querySelector("LastName")?.textContent || "";
   const fore = author.querySelector("ForeName")?.textContent || "";
   return cleanString(`${last} ${fore}`);
@@ -155,9 +164,9 @@ const authors = Array.from(authorNodes).map(author => {
   const abstract = abstractNode ? abstractNode.textContent : "";
 
   const template = `{{Publication
-|title=${authors} (${year}) ${title} ${journalAbbrev} ${volume}:${pages}. ${doiUrl}
+|title=${authorsShort} (${year}) ${title} ${journalAbbrev} ${volume}:${pages}. ${doiUrl}
 |info=[${pubmedUrl} PMID: ${pmid} Open Access]
-|authors=${authors}
+|authors=${authorsFull}
 |year=${year}
 |journal=${journalAbbrev}
 |abstract=${abstract}
