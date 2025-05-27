@@ -163,9 +163,12 @@ const authorsFull = Array.from(authorNodes).map(author => {
   const abstractNode = xmlDoc.querySelector("Abstract > AbstractText");
   const abstract = abstractNode ? abstractNode.textContent : "";
 
+  // Get PMC ID (if available)
+  const pmcid = result.articleids?.find(id => id.idtype === "pmc")?.value;
+
   const template = `{{Publication
 |title=${authorsShort} (${year}) ${title} ${journalAbbrev} ${volume}:${pages}. ${doiUrl}
-|info=[${pubmedUrl} PMID: ${pmid} Open Access]
+|info=[${pubmedUrl} PMID: ${pmid}${pmcid ? ' Open Access' : ''}]
 |authors=${authorsFull}
 |year=${year}
 |journal=${journalAbbrev}
