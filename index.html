@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PubMed to BioBlast Template</title>
+  <style>
+    :root {
+      --primary: #06038D;
+      --background: #f7f7f9;
+      --text: #333;
+      --accent: #06038D;
+      --border-radius: 8px;
+    }
+
+    body {
+      font-family: 'Segoe UI', Roboto, sans-serif;
+      background-color: var(--background);
+      color: var(--text);
+      margin: 0;
+      padding: 2rem;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    h1 {
+      color: var(--primary);
+      margin-bottom: 1rem;
+      font-size: 2rem;
+    }
+
+    label {
+      font-weight: 600;
+      margin-top: 1rem;
+    }
+
+    input, button, textarea {
+      width: 100%;
+      max-width: 600px;
+      padding: 0.75rem;
+      margin-top: 0.5rem;
+      border: 1px solid #ccc;
+      border-radius: var(--border-radius);
+      font-size: 1rem;
+      box-sizing: border-box;
+    }
+
+    input:focus, textarea:focus {
+      outline: none;
+      border-color: var(--primary);
+      box-shadow: 0 0 0 2px rgba(6, 3, 141, 0.2);
+    }
+
+    button {
+      background-color: var(--primary);
+      color: white;
+      border: none;
+      cursor: pointer;
+      font-weight: 600;
+      transition: background-color 0.2s ease;
+    }
+
+    button:hover {
+      background-color: #04026b;
+    }
+
+    textarea {
+      height: 300px;
+      margin-top: 1rem;
+      resize: vertical;
+    }
+
+    .footer {
+      margin-top: 2rem;
+      font-size: 0.85rem;
+      color: #666;
+    }
+
+    .footer a {
+      color: var(--primary);
+      text-decoration: none;
+    }
+  </style>
+</head>
+<body>
+  <h1>PubMed to BioBlast Template</h1>
+  <label for="email">Your Email (required by NCBI)</label>
+  <input id="email" placeholder="your.email@example.com" />
+
+  <label for="pmid">PMID or PubMed Link</label>
+  <input id="pmid" placeholder="38177128 or https://pubmed.ncbi.nlm.nih.gov/38177128" />
+
+  <label for="editor">Editor (Lastname + First Initial, e.g., Doe J)</label>
+  <input id="editor" placeholder="Doe J" />
+
+  <button onclick="generateTemplate()">Generate Template</button>
+
+  <label for="output">Generated Template</label>
+  <textarea id="output" readonly placeholder="Template will appear here..."></textarea>
+
+  <button onclick="copyTemplate()">Copy to Clipboard</button>
+
+  <div class="footer">
+    Made with 💙 for Oroboros Instruments · <a href="https://pubmed.ncbi.nlm.nih.gov/" target="_blank">PubMed</a> API
+  </div>
+
+  <script>
+    async function generateTemplate() {
+      const email = document.getElementById("email").value;
+      const input = document.getElementById("pmid").value;
+      const editor = document.getElementById("editor").value || "Plangger M";
+      const pmidMatch = input.match(/(\d{5,})/);
+      if (!pmidMatch) { alert("Invalid PubMed link or PMID."); return; }
+      const pmid = pmidMatch[1];
+
+      const response = await fetch(`https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=pubmed&id=${pmid}&retmode=json`);
+      const data = await response.json();
+      const result = data.result[pmid];
+      if (!result) { alert("No data found."); return; }
+
+      const authors = result.authors.map(a => a.name).join(", ");
+      const title = result.title;
+      const journalAbbrev = result.source;  // Correct abbreviation!
+      const year = result.pubdate.slice(0, 4);
+      const volume = result.volume || "";
+      const pages = result.pages || "";
+      const doi = result.elocationid?.includes("doi") ? result.elocationid : "";
+      const abstract = result.summary || "";
+      const pubmedUrl = `https://pubmed.ncbi.nlm.nih.gov/${pmid}`;
+      const doiUrl = doi ? `https://doi.org/${doi.replace("doi: ", "")}` : "";
+      const today = new Date().toISOString().slice(0,7);
+
+      const template = `{{Publication
+|title=${authors} (${year}) ${title}. ${journalAbbrev} ${volume}:${pages}. ${doiUrl}
+|info=[${pubmedUrl} PMID: ${pmid} Open Access]
+|authors=${authors}
+|year=${year}
+|journal=${journalAbbrev}
+|abstract=${abstract}
+|editor=[[${editor}]]
+|mipnetlab=NL Amsterdam Wuest RC
+}}
+{{Labeling
+|area=
+|diseases=
+|organism=
+|tissues=
+|preparations=
+|couplingstates=
+|pathways=
+|instruments=
+|additional=${today}
+}}`;
+
+      document.getElementById("output").value = template;
+    }
+
+    function copyTemplate() {
+      const text = document.getElementById("output");
+      text.select();
+      document.execCommand("copy");
+      alert("Template copied to clipboard!");
+    }
+  </script>
+</body>
+</html>
