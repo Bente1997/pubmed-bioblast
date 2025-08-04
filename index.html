@@ -81,6 +81,29 @@
       color: var(--primary);
       text-decoration: none;
     }
+
+.pagetitle-wrapper {
+    display: flex;
+    max-width: 600px;
+    width: 100%;
+    gap: 0.5rem; /* Adds space between the field and button */
+}
+
+.pagetitle-wrapper input {
+    flex: 1;
+}
+
+.pagetitle-wrapper button {
+    /* This rule needs to be more specific or override global styles */
+    flex: 0 0 auto;
+    padding: 0.75rem 1rem;
+    width: auto; /* This is the key change */
+}
+
+.pagetitle-wrapper button:hover {
+  background-color: #04026b;
+}
+
   </style>
 </head>
 <body>
@@ -95,6 +118,18 @@
   <input id="editor" placeholder="Doe J" />
 
   <button onclick="generateTemplate()">Generate Template</button>
+
+  <!-- Page Title Field -->
+<label for="pagetitle">Generated Page Title</label>
+<div class="pagetitle-wrapper">
+  <input id="pagetitle" readonly placeholder="Page title will appear here..." />
+  <button onclick="copyPageTitle()">Copy</button>
+</div>
+
+
+
+
+
 
   <label for="output">Generated Template</label>
   <textarea id="output" readonly placeholder="Template will appear here..."></textarea>
@@ -125,6 +160,7 @@ async function generateTemplate() {
   const year = result.pubdate.slice(0, 4);
   const volume = result.volume || "";
   const pages = result.pages || "";
+  const epubNotice = (!volume && !pages) ? "[Epub ahead of print]." : "";
   const doi = result.elocationid?.includes("doi") ? result.elocationid : "";
   const pubmedUrl = `https://pubmed.ncbi.nlm.nih.gov/${pmid}`;
   const doiUrl = doi ? `https://doi.org/${doi.replace("doi: ", "")}` : "";
@@ -167,7 +203,7 @@ const authorsFull = Array.from(authorNodes).map(author => {
   const pmcid = result.articleids?.find(id => id.idtype === "pmc")?.value;
 
   const template = `{{Publication
-|title=${authorsShort} (${year}) ${title} ${journalAbbrev} ${volume}:${pages}. ${doiUrl}
+|title=${authorsShort} (${year}) ${title} ${journalAbbrev} ${volume && pages ? volume + ":" + pages + "." : ""}${epubNotice} ${doiUrl}
 |info=[${pubmedUrl} PMID: ${pmid}${pmcid ? ' Open Access' : ''}]
 |authors=${authorsFull}
 |year=${year}
@@ -188,6 +224,12 @@ const authorsFull = Array.from(authorNodes).map(author => {
 |additional=${today}
 }}`;
 
+// Construct Page Title
+const firstAuthorLastName = authorNodes[0]?.querySelector("LastName")?.textContent || "Unknown";
+const pageTitle = `${firstAuthorLastName} ${year} ${journalAbbrev}`;
+document.getElementById("pagetitle").value = pageTitle;
+
+
   document.getElementById("output").value = template;
 }
 
@@ -197,6 +239,13 @@ const authorsFull = Array.from(authorNodes).map(author => {
       document.execCommand("copy");
       alert("Template copied to clipboard!");
     }
+
+function copyPageTitle() {
+  const titleField = document.getElementById("pagetitle");
+  titleField.select();
+  document.execCommand("copy");
+  alert("Page Title copied to clipboard!");
+}
   </script>
 </body>
 </html>
