@@ -196,8 +196,27 @@ const authorsFull = Array.from(authorNodes).map(author => {
 }).join(", ");
 
   // Abstract
-  const abstractNode = xmlDoc.querySelector("Abstract > AbstractText");
-  const abstract = abstractNode ? abstractNode.textContent : "";
+// Abstract
+const abstractNodes = xmlDoc.querySelectorAll("Abstract > AbstractText");
+let abstract = "";
+
+if (abstractNodes.length > 0) {
+  abstract = Array.from(abstractNodes).map(node => {
+    // Check for a label (e.g., "Background:", "Methods:") and format it
+    const label = node.getAttribute('Label');
+    const text = node.textContent;
+    
+    if (label) {
+      // Add a newline for separation and bold the label
+      return `\n\n'''${label}:''' ${text.trim()}`;
+    } else {
+      return text.trim();
+    }
+  }).join('');
+  
+  // Clean up leading newlines if present
+  abstract = abstract.trim();
+}
 
   // Get PMC ID (if available)
   const pmcid = result.articleids?.find(id => id.idtype === "pmc")?.value;
