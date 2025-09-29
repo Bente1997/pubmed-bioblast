@@ -195,39 +195,36 @@ const authorsFull = Array.from(authorNodes).map(author => {
   return cleanString(`${last} ${fore}`);
 }).join(", ");
 
-  // Abstract
+
 // Abstract
 const abstractNodes = xmlDoc.querySelectorAll("Abstract > AbstractText");
 let abstract = "";
 
 if (abstractNodes.length > 0) {
-  abstract = Array.from(abstractNodes).map(node => {
-    // Check for a label (e.g., "Background:", "Methods:") and format it
-    const label = node.getAttribute('Label');
-    const text = node.textContent;
-    
-    if (label) {
-      // Add a newline for separation and bold the label
-      return `\n\n'''${label}:''' ${text.trim()}`;
-    } else {
-      return text.trim();
-    }
-  }).join('');
-  
-  // Clean up leading newlines if present
-  abstract = abstract.trim();
+  // Map over all nodes, get their text content, and join with a single newline character
+  abstract = Array.from(abstractNodes)
+    .map(node => node.textContent.trim())
+    .join('\n'); // <--- Change is here
 }
+
+
+//  Get Keywords
+const keywordNodes = xmlDoc.querySelectorAll("KeywordList > Keyword");
+const keywords = Array.from(keywordNodes)
+    .map(node => node.textContent.trim())
+    .join(', '); // Join keywords with a comma and a space
 
   // Get PMC ID (if available)
   const pmcid = result.articleids?.find(id => id.idtype === "pmc")?.value;
 
-  const template = `{{Publication
+const template = `{{Publication
 |title=${authorsShort} (${year}) ${title} ${journalAbbrev} ${volume && pages ? volume + ":" + pages + "." : ""}${epubNotice} ${doiUrl}
 |info=[${pubmedUrl} PMID: ${pmid}${pmcid ? ' Open Access' : ''}]
 |authors=${authorsFull}
 |year=${year}
 |journal=${journalAbbrev}
 |abstract=${abstract}
+|keywords=${keywords}
 |editor=[[${editor}]]
 |mipnetlab=
 }}
