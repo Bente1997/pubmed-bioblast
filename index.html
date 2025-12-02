@@ -156,7 +156,7 @@ async function generateTemplate() {
   if (!result) { alert("No data found."); return; }
 
   const journalAbbrev = result.source;
-  const title = result.title;
+  const title = result.title[0].toUpperCase() + result.title.slice(1).toLowerCase();
   const year = result.pubdate.slice(0, 4);
   const volume = result.volume || "";
   const pages = result.pages || "";
