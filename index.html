@@ -129,10 +129,10 @@
   <button onclick="copyTemplate()">Copy to Clipboard</button>
 
   <div class="footer">
-    Made with 💙 for Oroboros Instruments · <a href="https://pubmed.ncbi.nlm.nih.gov/" target="_blank">PubMed</a> API.
+    Made with 💙 for Oroboros Instruments · <a href="https://pubmed.ncbi.nlm.nih.gov/" target="_blank">PubMed</a> API. Version 9.12.2025.
   </div>
 
-  <script>
+<script>
     async function generateTemplate() {
       const email = document.getElementById("email").value.trim();
       const input = document.getElementById("pmid").value.trim();
@@ -146,10 +146,10 @@
 
       try {
         if (pmid) {
-          // PubMed is best if you have it
+          // PubMed is best if you have it (Preferred for final publication data)
           await generateFromPubMed({ pmid, editor });
         } else if (doi) {
-          // DOI fallback (Wiley etc.)
+          // DOI fallback (Handles published papers and preprints like bioRxiv)
           await generateFromCrossref({ doi, editor });
         } else {
           alert("Couldn't find a PMID (PubMed) or DOI in that input.");
@@ -176,9 +176,17 @@
       return null;
     }
 
+    // FIX: Updated to strip bioRxiv/medRxiv version suffixes (v1, v2, etc.)
     function extractDoi(str) {
       const m = str.match(/10\.\d{4,9}\/[-._;()/:A-Z0-9]+/i);
-      return m ? m[0] : null;
+      let doi = m ? m[0] : null;
+
+      if (doi) {
+        // The Crossref API requires the base DOI. We must remove any trailing version number (v1, v2)
+        // which often gets included when extracting from the full bioRxiv URL path.
+        doi = doi.replace(/v\d+$/, ''); 
+      }
+      return doi;
     }
 
     function cleanString(str) {
@@ -189,9 +197,6 @@
     }
 
     // Convert Title Case -> sentence case:
-    // "High-Resolution Respirometry in a Small-Volume Chamber"
-    // -> "High-resolution respirometry in a small-volume chamber"
-    // Keeps tokens that were ALLCAPS/NUMERIC in original (ATP, DNA, O2, IL-6, etc.)
     function toSentenceCase(title) {
       const original = (title || "").trim();
       if (!original) return "";
@@ -239,9 +244,11 @@
       const epubNotice = (!volume && !pages) ? "[Epub ahead of print]." : "";
 
       // DOI (best-effort from elocationid like "doi: 10.xxxx/yyy")
-      const doi = (result.elocationid && result.elocationid.includes("doi")) ? result.elocationid : "";
+      const doiMatch = result.elocationid && result.elocationid.includes("doi") ? result.elocationid.match(/10\.\d{4,9}\/[-._;()/:A-Z0-9]+/i) : null;
+      const doi = doiMatch ? doiMatch[0] : "";
+      
       const pubmedUrl = `https://pubmed.ncbi.nlm.nih.gov/${pmid}`;
-      const doiUrl = doi ? `https://doi.org/${doi.replace("doi: ", "")}` : "";
+      const doiUrl = doi ? `https://doi.org/${doi}` : "";
 
       const today = yyyyMmNow();
 
@@ -312,17 +319,25 @@
       setOutputs({ template, pageTitle });
     }
 
-    // ---------- Crossref path (DOI / Wiley / any publisher DOI) ----------
+    // ---------- Crossref path (DOI / Wiley / any publisher DOI / bioRxiv) ----------
     async function generateFromCrossref({ doi, editor }) {
       const r = await fetch(`https://api.crossref.org/works/${encodeURIComponent(doi)}`, {
         headers: { Accept: "application/json" }
       });
-      if (!r.ok) { alert("Crossref lookup failed for that DOI."); return; }
+      // The alert message is updated to include the DOI being searched, which can help debugging
+      if (!r.ok) { alert(`Crossref lookup failed for DOI: ${doi}. Status: ${r.status}`); return; } 
       const data = await r.json();
       const msg = data?.message;
       if (!msg) { alert("No Crossref data found for that DOI."); return; }
 
-      const journal = (msg["container-title"]?.[0] || "").trim();
+      const rawJournal = (msg["container-title"]?.[0] || "").trim();
+      
+      // Check for preprints: bioRxiv/medRxiv
+      const isBiorxiv = rawJournal.toLowerCase().includes("biorxiv");
+      const isMedrxiv = rawJournal.toLowerCase().includes("medrxiv");
+      const isPreprint = isBiorxiv || isMedrxiv;
+
+      const journal = rawJournal;
       const rawTitle = toSentenceCase(msg.title?.[0] || "");
       const year =
         msg.published?.["date-parts"]?.[0]?.[0] ||
@@ -354,13 +369,22 @@
       // Keywords: usually not present in Crossref -> keep blank
       const keywords = "";
 
-      // Use publisher landing page if available; else DOI URL
-      const landing = msg.URL ? msg.URL : "";
-      const infoLink = landing ? landing : doiUrl;
+      // --- INFO LINE LOGIC: Differentiates between published and preprint DOI ---
+      let infoLine;
+      if (isPreprint) {
+        // Explicitly link the DOI and label it as a preprint on bioRxiv/medRxiv
+        infoLine = `|info=[${doiUrl} Preprint on ${rawJournal} | DOI: ${doi}]`;
+      } else {
+        // Standard published paper DOI: Use publisher landing page if available, else DOI URL
+        const landing = msg.URL ? msg.URL : "";
+        const infoLink = landing ? landing : doiUrl;
+        infoLine = `|info=[${infoLink} DOI: ${doi}]`;
+      }
+      // --------------------------------------------------------------------------
 
       const template = `{{Publication
 |title=${authorsShort} (${year}) ${rawTitle} ${journal} ${volume && pages ? volume + ":" + pages + "." : ""} ${doiUrl}
-|info=[${infoLink} DOI: ${doi}]
+${infoLine}
 |authors=${authorsFull}
 |year=${year}
 |journal=${journal}
