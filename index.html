@@ -141,15 +141,13 @@
       if (!email) { alert("Please enter your email (required by NCBI)."); return; }
       if (!input) { alert("Please enter a PMID, PubMed link, DOI, or DOI link."); return; }
 
-      const pmid = extractPmid(input);     // strict: only PubMed URLs or pure digits
-      const doi = extractDoi(input);       // DOI from anywhere (Wiley, doi.org, plain DOI)
+      const pmid = extractPmid(input);
+      const doi = extractDoi(input);
 
       try {
         if (pmid) {
-          // PubMed is best if you have it (Preferred for final publication data)
           await generateFromPubMed({ pmid, editor });
         } else if (doi) {
-          // DOI fallback (Handles published papers and preprints like bioRxiv)
           await generateFromCrossref({ doi, editor });
         } else {
           alert("Couldn't find a PMID (PubMed) or DOI in that input.");
@@ -160,61 +158,39 @@
       }
     }
 
-    // ---------- parsing helpers ----------
     function extractPmid(str) {
       const s = str.trim();
-
-      // PubMed URL form
       if (/pubmed\.ncbi\.nlm\.nih\.gov/i.test(s)) {
         const m = s.match(/pubmed\.ncbi\.nlm\.nih\.gov\/(\d{5,})/i);
         return m ? m[1] : null;
       }
-
-      // Pure digits form
       if (/^\d{5,}$/.test(s)) return s;
-
       return null;
     }
 
-    // FIX: Updated to strip bioRxiv/medRxiv version suffixes (v1, v2, etc.)
     function extractDoi(str) {
       const m = str.match(/10\.\d{4,9}\/[-._;()/:A-Z0-9]+/i);
       let doi = m ? m[0] : null;
-
-      if (doi) {
-        // The Crossref API requires the base DOI. We must remove any trailing version number (v1, v2)
-        // which often gets included when extracting from the full bioRxiv URL path.
-        doi = doi.replace(/v\d+$/, ''); 
-      }
+      if (doi) { doi = doi.replace(/v\d+$/, ''); }
       return doi;
     }
 
     function cleanString(str) {
-      return (str || "")
-        .normalize("NFD")
-        .replace(/[\u0300-\u036f]/g, "")
-        .replace(/[^\x00-\x7F]/g, "");
+      return (str || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^\x00-\x7F]/g, "");
     }
 
-    // Convert Title Case -> sentence case:
     function toSentenceCase(title) {
       const original = (title || "").trim();
       if (!original) return "";
-
       let t = original.replace(/\s+/g, " ").toLowerCase();
       t = t.charAt(0).toUpperCase() + t.slice(1);
-
-      // after colon
       t = t.replace(/:\s*([a-z])/g, (m, p1) => ": " + p1.toUpperCase());
-
-      // restore obvious acronyms/formulas that were uppercase in the original
       const tokens = (original.match(/\b[A-Z0-9][A-Z0-9\-]{1,}\b/g) || []);
       for (const tok of tokens) {
         const escaped = tok.toLowerCase().replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&");
         const re = new RegExp(`\\b${escaped}\\b`, "g");
         t = t.replace(re, tok);
       }
-
       return t;
     }
 
@@ -227,71 +203,60 @@
       document.getElementById("pagetitle").value = pageTitle || "";
     }
 
-    // ---------- PubMed path ----------
-    async function generateFromPubMed({ pmid, editor }) {
-      const summaryResponse = await fetch(
-        `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=pubmed&id=${pmid}&retmode=json`
-      );
-      const summaryData = await summaryResponse.json();
-      const result = summaryData?.result?.[pmid];
-      if (!result) { alert("No PubMed data found for that PMID."); return; }
+    // ---------- PubMed path (Updated for Full Citation) ----------
+// ---------- PubMed path (Restored semicolon format) ----------
+async function generateFromPubMed({ pmid, editor }) {
+  const summaryResponse = await fetch(
+    `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=pubmed&id=${pmid}&retmode=json`
+  );
+  const summaryData = await summaryResponse.json();
+  const result = summaryData?.result?.[pmid];
+  if (!result) { alert("No PubMed data found for that PMID."); return; }
 
-      const journalAbbrev = result.source || "";
-      const title = toSentenceCase(result.title || "");
-      const year = (result.pubdate || "").slice(0, 4);
-      const volume = result.volume || "";
-      const pages = result.pages || "";
-      const epubNotice = (!volume && !pages) ? "[Epub ahead of print]." : "";
+  const journalAbbrev = result.source || "";
+  const title = toSentenceCase(result.title || "");
+  const year = (result.pubdate || "").slice(0, 4);
+  
+  // CITATION LOGIC: Date;Volume(Issue):Pages
+  const fullDate = result.pubdate || ""; 
+  const volume = result.volume || "";
+  const issue = result.issue ? `(${result.issue})` : "";
+  const pages = result.pages || "";
+  
+  // Builds the string: e.g., "2024 Apr 4;25(7):4025"
+  let citation = `${fullDate};${volume}${issue}`;
+  if (pages) { citation += `:${pages}`; }
 
-      // DOI (best-effort from elocationid like "doi: 10.xxxx/yyy")
-      const doiMatch = result.elocationid && result.elocationid.includes("doi") ? result.elocationid.match(/10\.\d{4,9}\/[-._;()/:A-Z0-9]+/i) : null;
-      const doi = doiMatch ? doiMatch[0] : "";
-      
-      const pubmedUrl = `https://pubmed.ncbi.nlm.nih.gov/${pmid}`;
-      const doiUrl = doi ? `https://doi.org/${doi}` : "";
+  const doiMatch = result.elocationid && result.elocationid.includes("doi") ? result.elocationid.match(/10\.\d{4,9}\/[-._;()/:A-Z0-9]+/i) : null;
+  const doi = doiMatch ? doiMatch[0] : "";
+  const pubmedUrl = `https://pubmed.ncbi.nlm.nih.gov/${pmid}`;
+  const doiUrl = doi ? `https://doi.org/${doi}` : "";
+  const today = yyyyMmNow();
 
-      const today = yyyyMmNow();
+  const fetchResponse = await fetch(`https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&id=${pmid}&retmode=xml`);
+  const fetchText = await fetchResponse.text();
+  const parser = new DOMParser();
+  const xmlDoc = parser.parseFromString(fetchText, "application/xml");
+  const authorNodes = xmlDoc.querySelectorAll("AuthorList > Author");
 
-      // efetch XML for authors/abstract/keywords
-      const fetchResponse = await fetch(
-        `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&id=${pmid}&retmode=xml`
-      );
-      const fetchText = await fetchResponse.text();
-      const parser = new DOMParser();
-      const xmlDoc = parser.parseFromString(fetchText, "application/xml");
+  const authorsShort = Array.from(authorNodes).map(author => {
+    const last = author.querySelector("LastName")?.textContent || "";
+    const initials = author.querySelector("Initials")?.textContent || "";
+    return cleanString(`${last} ${initials}`.trim());
+  }).join(", ");
 
-      const authorNodes = xmlDoc.querySelectorAll("AuthorList > Author");
+  const authorsFull = Array.from(authorNodes).map(author => {
+    const last = author.querySelector("LastName")?.textContent || "";
+    const fore = author.querySelector("ForeName")?.textContent || "";
+    return cleanString(`${last} ${fore}`.trim());
+  }).join(", ");
 
-      const authorsShort = Array.from(authorNodes).map(author => {
-        const last = author.querySelector("LastName")?.textContent || "";
-        const initials = author.querySelector("Initials")?.textContent || "";
-        return cleanString(`${last} ${initials}`.trim());
-      }).join(", ");
+  const abstract = Array.from(xmlDoc.querySelectorAll("Abstract > AbstractText")).map(node => node.textContent.trim()).join("\n");
+  const keywords = Array.from(xmlDoc.querySelectorAll("KeywordList > Keyword")).map(n => n.textContent.trim()).join(", ");
+  const pmcid = result.articleids?.find(id => id.idtype === "pmc")?.value;
 
-      const authorsFull = Array.from(authorNodes).map(author => {
-        const last = author.querySelector("LastName")?.textContent || "";
-        const fore = author.querySelector("ForeName")?.textContent || "";
-        return cleanString(`${last} ${fore}`.trim());
-      }).join(", ");
-
-      // Abstract (multi-part)
-      const abstractNodes = xmlDoc.querySelectorAll("Abstract > AbstractText");
-      let abstract = "";
-      if (abstractNodes.length > 0) {
-        abstract = Array.from(abstractNodes)
-          .map(node => node.textContent.trim())
-          .join("\n");
-      }
-
-      // Keywords
-      const keywordNodes = xmlDoc.querySelectorAll("KeywordList > Keyword");
-      const keywords = Array.from(keywordNodes).map(n => n.textContent.trim()).join(", ");
-
-      // PMCID -> Open Access marker (your rule)
-      const pmcid = result.articleids?.find(id => id.idtype === "pmc")?.value;
-
-      const template = `{{Publication
-|title=${authorsShort} (${year}) ${title} ${journalAbbrev} ${volume && pages ? volume + ":" + pages + "." : ""}${epubNotice} ${doiUrl}
+  const template = `{{Publication
+|title=${authorsShort}. ${title} ${journalAbbrev}. ${citation}. ${doiUrl}
 |info=[${pubmedUrl} PMID: ${pmid}${pmcid ? " Open Access" : ""}]
 |authors=${authorsFull}
 |year=${year}
@@ -313,41 +278,30 @@
 |additional=${today}
 }}`;
 
-      const firstAuthorLastName = authorNodes[0]?.querySelector("LastName")?.textContent || "Unknown";
-      const pageTitle = `${firstAuthorLastName} ${year} ${journalAbbrev}`.trim();
+  const firstAuthorLastName = authorNodes[0]?.querySelector("LastName")?.textContent || "Unknown";
+  setOutputs({ template, pageTitle: `${firstAuthorLastName} ${year} ${journalAbbrev}`.trim() });
+}
 
-      setOutputs({ template, pageTitle });
-    }
-
-    // ---------- Crossref path (DOI / Wiley / any publisher DOI / bioRxiv) ----------
+    // ---------- Crossref path (Updated for Full Citation) ----------
     async function generateFromCrossref({ doi, editor }) {
       const r = await fetch(`https://api.crossref.org/works/${encodeURIComponent(doi)}`, {
         headers: { Accept: "application/json" }
       });
-      // The alert message is updated to include the DOI being searched, which can help debugging
-      if (!r.ok) { alert(`Crossref lookup failed for DOI: ${doi}. Status: ${r.status}`); return; } 
+      if (!r.ok) { alert(`Crossref lookup failed for DOI: ${doi}`); return; } 
       const data = await r.json();
       const msg = data?.message;
-      if (!msg) { alert("No Crossref data found for that DOI."); return; }
 
-      const rawJournal = (msg["container-title"]?.[0] || "").trim();
-      
-      // Check for preprints: bioRxiv/medRxiv
-      const isBiorxiv = rawJournal.toLowerCase().includes("biorxiv");
-      const isMedrxiv = rawJournal.toLowerCase().includes("medrxiv");
-      const isPreprint = isBiorxiv || isMedrxiv;
-
-      const journal = rawJournal;
+      const journal = (msg["container-title"]?.[0] || "").trim();
       const rawTitle = toSentenceCase(msg.title?.[0] || "");
-      const year =
-        msg.published?.["date-parts"]?.[0]?.[0] ||
-        msg["published-online"]?.["date-parts"]?.[0]?.[0] ||
-        msg.created?.["date-parts"]?.[0]?.[0] ||
-        "";
+      const year = msg.published?.["date-parts"]?.[0]?.[0] || "";
+      
+      // Crossref doesn't always have "Apr 4", so we build what we can
+      const volume = msg.volume || "";
+      const issue = msg.issue ? `(${msg.issue})` : "";
+      const pages = msg.page || "";
+      const citation = `${year};${volume}${issue}:${pages}`;
 
-      const volume = (msg.volume || "").trim();
-      const pages = (msg.page || "").trim();
-      const doiUrl = msg.DOI ? `https://doi.org/${msg.DOI}` : `https://doi.org/${doi}`;
+      const doiUrl = `https://doi.org/${doi}`;
       const today = yyyyMmNow();
 
       const authors = (msg.author || []).map(a => {
@@ -357,39 +311,18 @@
         return { last, given, initials };
       });
 
-      const authorsShort = authors.map(a => `${a.last} ${a.initials}`.trim()).filter(Boolean).join(", ");
-      const authorsFull = authors.map(a => `${a.last} ${a.given}`.trim()).filter(Boolean).join(", ");
-
-      // Abstract: sometimes present (often not). Strip tags if present.
-      let abstract = (msg.abstract || "")
-        .replace(/<[^>]+>/g, "")
-        .replace(/\s+\n/g, "\n")
-        .trim();
-
-      // Keywords: usually not present in Crossref -> keep blank
-      const keywords = "";
-
-      // --- INFO LINE LOGIC: Differentiates between published and preprint DOI ---
-      let infoLine;
-      if (isPreprint) {
-        // Explicitly link the DOI and label it as a preprint on bioRxiv/medRxiv
-        infoLine = `|info=[${doiUrl} Preprint on ${rawJournal} | DOI: ${doi}]`;
-      } else {
-        // Standard published paper DOI: Use publisher landing page if available, else DOI URL
-        const landing = msg.URL ? msg.URL : "";
-        const infoLink = landing ? landing : doiUrl;
-        infoLine = `|info=[${infoLink} DOI: ${doi}]`;
-      }
-      // --------------------------------------------------------------------------
+      const authorsShort = authors.map(a => `${a.last} ${a.initials}`).join(", ");
+      const authorsFull = authors.map(a => `${a.last} ${a.given}`).join(", ");
+      let abstract = (msg.abstract || "").replace(/<[^>]+>/g, "").trim();
 
       const template = `{{Publication
-|title=${authorsShort} (${year}) ${rawTitle} ${journal} ${volume && pages ? volume + ":" + pages + "." : ""} ${doiUrl}
-${infoLine}
+|title=${authorsShort}. ${rawTitle} ${journal}. ${citation}. ${doiUrl}
+|info=[${doiUrl} DOI: ${doi}]
 |authors=${authorsFull}
 |year=${year}
 |journal=${journal}
 |abstract=${abstract}
-|keywords=${keywords}
+|keywords=
 |editor=[[${editor}]]
 |mipnetlab=
 }}
@@ -406,25 +339,22 @@ ${infoLine}
 }}`;
 
       const firstAuthor = authors[0]?.last || "Unknown";
-      const pageTitle = `${firstAuthor} ${year} ${journal}`.trim();
-
-      setOutputs({ template, pageTitle });
+      setOutputs({ template, pageTitle: `${firstAuthor} ${year} ${journal}`.trim() });
     }
 
-    // ---------- copy buttons ----------
     function copyTemplate() {
       const text = document.getElementById("output");
       text.select();
       document.execCommand("copy");
-      alert("Template copied to clipboard!");
+      alert("Template copied!");
     }
 
     function copyPageTitle() {
       const titleField = document.getElementById("pagetitle");
       titleField.select();
       document.execCommand("copy");
-      alert("Page Title copied to clipboard!");
+      alert("Page Title copied!");
     }
-  </script>
+</script>
 </body>
 </html>
