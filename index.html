@@ -276,8 +276,8 @@ async function generateFromPubMed({ pmid, editor }) {
       const authorsShort = (msg.author || []).map(a => `${cleanString(a.family)} ${(a.given || "").match(/\b\w/g).join("")}`).join(", ");
       const authorsFull = (msg.author || []).map(a => `${cleanString(a.family)} ${cleanString(a.given)}`).join(", ");
 
-      const displayTitle = `${authorsShort} (${year}) ${title} ${journal} ${volume}${issue}${pages ? ":" + pages : ""}. https://doi.org/${doi}`;
-
+      const displayTitle = `${authorsShort} (${year}) ${title}. ${journal} ${volume}${issue}${pages ? ":" + pages : ""}. https://doi.org/${doi}`;
+  
       const template = `{{Publication
 |title=${displayTitle}
 |info=[https://doi.org/${doi} DOI: ${doi}]
