@@ -107,11 +107,12 @@
   <button onclick="copyTemplate()">Copy to Clipboard</button>
 
   <div class="footer">
-    Version 1.20.2026.
+    Version 1.4.2026.
   </div>
 
 <script>
     async function generateTemplate() {
+      await loadCapitalizationExceptions();
       const email = document.getElementById("email").value.trim();
       const input = document.getElementById("pmid").value.trim();
       const editor = document.getElementById("editor").value.trim() || "Plangger M";
@@ -151,11 +152,87 @@
       return (str || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^\x00-\x7F]/g, "");
     }
 
+    function collapseSpacedInitials(name) {
+      return (name || "").replace(/\b(?:[A-Z]\s+){1,}[A-Z]\b/g, match => match.replace(/\s+/g, ""));
+    }
+
+    let capitalizationExceptions = [];
+    let capitalizationExceptionsPromise = null;
+
+    async function loadCapitalizationExceptions() {
+      if (!capitalizationExceptionsPromise) {
+        capitalizationExceptionsPromise = fetch("./abbreviations_to_capitalize.txt")
+          .then(r => {
+            if (!r.ok) throw new Error(`Failed to load capitalization exceptions: ${r.status}`);
+            return r.text();
+          })
+          .then(text => {
+            capitalizationExceptions = text
+              .split(/\r?\n/)
+              .map(line => line.trim())
+              .filter(Boolean);
+            return capitalizationExceptions;
+          })
+          .catch(err => {
+            console.warn(err);
+            capitalizationExceptions = [];
+            return capitalizationExceptions;
+          });
+      }
+      return capitalizationExceptionsPromise;
+    }
+
+    loadCapitalizationExceptions();
+
+    function escapeRegex(str) {
+      return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    }
+
+    function preserveExceptionFormatting(originalTitle, formattedTitle) {
+      if (!originalTitle || !formattedTitle) return formattedTitle;
+
+      const matches = [];
+      const sortedExceptions = [...capitalizationExceptions].sort((a, b) => b.length - a.length);
+
+      for (const term of sortedExceptions) {
+        const regex = new RegExp(escapeRegex(term), "gi");
+        let match;
+
+        while ((match = regex.exec(originalTitle)) !== null) {
+          matches.push({
+            start: match.index,
+            end: match.index + match[0].length,
+            text: originalTitle.slice(match.index, match.index + match[0].length)
+          });
+        }
+      }
+
+      matches.sort((a, b) => a.start - b.start || b.end - a.end);
+
+      const accepted = [];
+      for (const match of matches) {
+        if (accepted.some(existing => match.start < existing.end && match.end > existing.start)) continue;
+        accepted.push(match);
+      }
+
+      let restored = "";
+      let cursor = 0;
+      for (const match of accepted) {
+        restored += formattedTitle.slice(cursor, match.start);
+        restored += match.text;
+        cursor = match.end;
+      }
+      restored += formattedTitle.slice(cursor);
+      return restored;
+    }
+
     function toSentenceCase(title) {
-      let t = (title || "").trim().toLowerCase();
+      const original = (title || "").trim();
+      let t = original.toLowerCase();
       if (!t) return "";
       t = t.charAt(0).toUpperCase() + t.slice(1);
-      return t.replace(/:\s*([a-z])/g, (m, p1) => ": " + p1.toUpperCase());
+      t = t.replace(/:\s*([a-z])/g, (m, p1) => ": " + p1.toUpperCase());
+      return preserveExceptionFormatting(original, t);
     }
 
     function yyyyMmNow() { return new Date().toISOString().slice(0, 7); }
@@ -193,7 +270,6 @@ async function generateFromPubMed({ pmid, editor }) {
   const title = toSentenceCase(result.title || "");
   const year = (result.pubdate || "").slice(0, 4);
   const volume = result.volume || "";
-  const issue = result.issue ? `(${result.issue})` : "";
   
   // Logic to get '31' from '15010031' or use standard pages
   let pages = result.pages || "";
@@ -215,11 +291,12 @@ async function generateFromPubMed({ pmid, editor }) {
   const authorNodes = xmlDoc.querySelectorAll("AuthorList > Author");
 
   const authorsShort = Array.from(authorNodes).map(a => {
-    return cleanString(`${a.querySelector("LastName")?.textContent || ""} ${a.querySelector("Initials")?.textContent || ""}`.trim());
+    const initials = (a.querySelector("Initials")?.textContent || "").replace(/\s+/g, "");
+    return cleanString(`${a.querySelector("LastName")?.textContent || ""} ${initials}`.trim());
   }).join(", ");
 
   const authorsFull = Array.from(authorNodes).map(a => {
-    return cleanString(`${a.querySelector("LastName")?.textContent || ""} ${a.querySelector("ForeName")?.textContent || ""}`.trim());
+    return collapseSpacedInitials(cleanString(`${a.querySelector("LastName")?.textContent || ""} ${a.querySelector("ForeName")?.textContent || ""}`.trim()));
   }).join(", ");
 
   const doiMatch = result.elocationid?.match(/10\.\d{4,9}\/[-._;()/:A-Z0-9]+/i);
@@ -230,7 +307,7 @@ async function generateFromPubMed({ pmid, editor }) {
   const pmcid = result.articleids?.find(id => id.idtype === "pmc")?.value;
 
   // Final Citation String construction
-  let citation = `${journalAbbrev} ${volume}${issue}`;
+  let citation = `${journalAbbrev} ${volume}`;
   if (pages) citation += `:${pages}`;
 
   const displayTitle = `${authorsShort} (${year}) ${title} ${citation}. ${doiUrl}`;
@@ -271,12 +348,14 @@ async function generateFromPubMed({ pmid, editor }) {
       const year = msg.published?.["date-parts"]?.[0]?.[0] || "";
       const pages = cleanArticleId(msg.page || "");
       const volume = msg.volume || "";
-      const issue = msg.issue ? `(${msg.issue})` : "";
       
-      const authorsShort = (msg.author || []).map(a => `${cleanString(a.family)} ${(a.given || "").match(/\b\w/g).join("")}`).join(", ");
-      const authorsFull = (msg.author || []).map(a => `${cleanString(a.family)} ${cleanString(a.given)}`).join(", ");
+      const authorsShort = (msg.author || []).map(a => {
+        const initials = ((a.given || "").match(/\b\w/g) || []).join("").replace(/\s+/g, "");
+        return `${cleanString(a.family)} ${initials}`.trim();
+      }).join(", ");
+      const authorsFull = (msg.author || []).map(a => collapseSpacedInitials(`${cleanString(a.family)} ${cleanString(a.given)}`.trim())).join(", ");
 
-      const displayTitle = `${authorsShort} (${year}) ${title}. ${journal} ${volume}${issue}${pages ? ":" + pages : ""}. https://doi.org/${doi}`;
+      const displayTitle = `${authorsShort} (${year}) ${title}. ${journal} ${volume}${pages ? ":" + pages : ""}. https://doi.org/${doi}`;
   
       const template = `{{Publication
 |title=${displayTitle}
