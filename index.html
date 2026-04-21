@@ -78,6 +78,7 @@
       font-size: 0.85rem;
       color: #666;
     }
+
   </style>
 </head>
 
@@ -107,10 +108,18 @@
   <button onclick="copyTemplate()">Copy to Clipboard</button>
 
   <div class="footer">
-    Version 1.4.2026.
+    Version 21.4.2026.
   </div>
 
 <script>
+    function isUsableJournalAbbreviation(shortTitle, fullTitle) {
+      const shortValue = (shortTitle || "").trim();
+      const fullValue = (fullTitle || "").trim();
+      if (!shortValue) return false;
+      if (!fullValue) return true;
+      return shortValue.toLowerCase() !== fullValue.toLowerCase();
+    }
+
     async function generateTemplate() {
       await loadCapitalizationExceptions();
       const email = document.getElementById("email").value.trim();
@@ -125,7 +134,7 @@
         if (pmid) {
           await generateFromPubMed({ pmid, editor });
         } else if (doi) {
-          await generateFromCrossref({ doi, editor });
+          await generateFromCrossref({ doi, editor, email });
         } else {
           alert("Couldn't find a PMID or DOI.");
         }
@@ -242,6 +251,106 @@
       document.getElementById("pagetitle").value = pageTitle || "";
     }
 
+    async function resolveJournalAbbrevFromIssn(issn) {
+      if (!issn) return "";
+
+      try {
+        const searchResponse = await fetch(
+          `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=nlmcatalog&term=${encodeURIComponent(issn)}[issn]&retmode=json`
+        );
+        const searchData = await searchResponse.json();
+        const catalogId = searchData?.esearchresult?.idlist?.[0];
+        if (!catalogId) return "";
+
+        const catalogResponse = await fetch(
+          `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=nlmcatalog&id=${catalogId}&retmode=text`
+        );
+        const catalogText = await catalogResponse.text();
+        const match = catalogText.match(/NLM Title Abbreviation:\s*([^\r\n]+)/i);
+        return match?.[1]?.trim() || "";
+      } catch (err) {
+        console.warn("Failed to resolve journal abbreviation from ISSN via NLM Catalog", err);
+        return "";
+      }
+    }
+
+    async function findPubMedIdForDoi({ doi, email, crossrefMessage }) {
+      try {
+        const emailParam = email ? `&email=${encodeURIComponent(email)}` : "";
+        const doiQuery = `"${doi}"[doi] OR "${doi}"[AID]`;
+        let searchResponse = await fetch(
+          `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=${encodeURIComponent(doiQuery)}&retmode=json${emailParam}`
+        );
+        let searchData = await searchResponse.json();
+        let pmid = searchData?.esearchresult?.idlist?.[0];
+
+        if (!pmid) {
+          const crossrefTitle = (crossrefMessage.title?.[0] || "").trim();
+          const firstAuthorFamily = (crossrefMessage.author?.[0]?.family || "").trim();
+          if (crossrefTitle) {
+            const titleQuery = firstAuthorFamily
+              ? `"${crossrefTitle}"[Title] AND ${firstAuthorFamily}[Author]`
+              : `"${crossrefTitle}"[Title]`;
+            searchResponse = await fetch(
+              `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=${encodeURIComponent(titleQuery)}&retmode=json${emailParam}`
+            );
+            searchData = await searchResponse.json();
+            pmid = searchData?.esearchresult?.idlist?.[0];
+          }
+        }
+        return pmid || "";
+      } catch (err) {
+        console.warn("Failed to resolve journal abbreviation from DOI via PubMed", err);
+        return "";
+      }
+    }
+
+    async function fetchPubMedDetails({ pmid, email }) {
+      if (!pmid) return null;
+
+      try {
+        const emailParam = email ? `&email=${encodeURIComponent(email)}` : "";
+        const [summaryResponse, fetchResponse] = await Promise.all([
+          fetch(`https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=pubmed&id=${pmid}&retmode=json${emailParam}`),
+          fetch(`https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&id=${pmid}&retmode=xml${emailParam}`)
+        ]);
+
+        const summaryData = await summaryResponse.json();
+        const xml = await fetchResponse.text();
+        const xmlDoc = new DOMParser().parseFromString(xml, "application/xml");
+
+        return {
+          pmid,
+          journalAbbrev: summaryData?.result?.[pmid]?.source?.trim() || "",
+          abstract: Array.from(xmlDoc.querySelectorAll("Abstract > AbstractText")).map(n => n.textContent.trim()).join("\n"),
+          keywords: Array.from(xmlDoc.querySelectorAll("KeywordList > Keyword")).map(n => n.textContent.trim()).join(", ")
+        };
+      } catch (err) {
+        console.warn("Failed to fetch PubMed details", err);
+        return null;
+      }
+    }
+
+    async function resolveJournalAbbrevFromDoi({ doi, email, crossrefMessage, pubmedDetails }) {
+      const crossrefFullTitle = crossrefMessage["container-title"]?.[0] || "";
+      const crossrefAbbrev = crossrefMessage["short-container-title"]?.[0]?.trim();
+      if (isUsableJournalAbbreviation(crossrefAbbrev, crossrefFullTitle)) {
+        return crossrefAbbrev;
+      }
+
+      if (pubmedDetails?.journalAbbrev) {
+        return pubmedDetails.journalAbbrev;
+      }
+
+      const issns = Array.isArray(crossrefMessage.ISSN) ? crossrefMessage.ISSN : [];
+      for (const issn of issns) {
+        const catalogAbbrev = await resolveJournalAbbrevFromIssn(issn);
+        if (catalogAbbrev) return catalogAbbrev;
+      }
+
+      return crossrefFullTitle;
+    }
+
     // Helper to get the short article ID (e.g., "31" from "metabo15010031")
     function cleanArticleId(rawId) {
         if (!rawId) return "";
@@ -337,17 +446,21 @@ async function generateFromPubMed({ pmid, editor }) {
 
   setOutputs({ template, pageTitle: `${authorNodes[0]?.querySelector("LastName")?.textContent || "Unknown"} ${year} ${journalAbbrev}` });
 }
-    async function generateFromCrossref({ doi, editor }) {
+    async function generateFromCrossref({ doi, editor, email }) {
       // Crossref path updated with similar year and ID logic
       const r = await fetch(`https://api.crossref.org/works/${encodeURIComponent(doi)}`);
       const data = await r.json();
       const msg = data.message;
 
-      const journal = msg["container-title"]?.[0] || "";
+      const pmid = await findPubMedIdForDoi({ doi, email, crossrefMessage: msg });
+      const pubmedDetails = await fetchPubMedDetails({ pmid, email });
+      const journalAbbrev = await resolveJournalAbbrevFromDoi({ doi, email, crossrefMessage: msg, pubmedDetails });
       const title = toSentenceCase(msg.title?.[0] || "");
       const year = msg.published?.["date-parts"]?.[0]?.[0] || "";
       const pages = cleanArticleId(msg.page || "");
       const volume = msg.volume || "";
+      const abstract = pubmedDetails?.abstract || (msg.abstract || "").replace(/<[^>]+>/g, "");
+      const keywords = pubmedDetails?.keywords || "";
       
       const authorsShort = (msg.author || []).map(a => {
         const initials = ((a.given || "").match(/\b\w/g) || []).join("").replace(/\s+/g, "");
@@ -355,16 +468,16 @@ async function generateFromPubMed({ pmid, editor }) {
       }).join(", ");
       const authorsFull = (msg.author || []).map(a => collapseSpacedInitials(`${cleanString(a.family)} ${cleanString(a.given)}`.trim())).join(", ");
 
-      const displayTitle = `${authorsShort} (${year}) ${title}. ${journal} ${volume}${pages ? ":" + pages : ""}. https://doi.org/${doi}`;
+      const displayTitle = `${authorsShort} (${year}) ${title}. ${journalAbbrev} ${volume}${pages ? ":" + pages : ""}. https://doi.org/${doi}`;
   
       const template = `{{Publication
 |title=${displayTitle}
 |info=[https://doi.org/${doi} DOI: ${doi}]
 |authors=${authorsFull}
 |year=${year}
-|journal=${journal}
-|abstract=${(msg.abstract || "").replace(/<[^>]+>/g, "")}
-|keywords=
+|journal=${journalAbbrev}
+|abstract=${abstract}
+|keywords=${keywords}
 |editor=[[${editor}]]
 |mipnetlab=
 }}
@@ -380,7 +493,7 @@ async function generateFromPubMed({ pmid, editor }) {
 |additional=${yyyyMmNow()}
 }}`;
 
-      setOutputs({ template, pageTitle: `${msg.author?.[0]?.family || "Unknown"} ${year} ${journal}` });
+      setOutputs({ template, pageTitle: `${msg.author?.[0]?.family || "Unknown"} ${year} ${journalAbbrev}` });
     }
 
     function copyTemplate() {
